@@ -399,6 +399,43 @@ ingress:
 	validate(remoteConfig.Ingress)
 }
 
+func TestH2cOriginConfigResolution(t *testing.T) {
+	t.Run("json remote config with h2cOrigin", func(t *testing.T) {
+		rawConfig := []byte(`
+{
+    "originRequest": {"h2cOrigin": true},
+    "ingress": [
+        {"hostname": "grpc.example.com", "service": "http://localhost:50051"},
+        {"service": "http_status:404"}
+    ]
+}`)
+		var remoteConfig RemoteConfig
+		err := json.Unmarshal(rawConfig, &remoteConfig)
+		require.NoError(t, err)
+		require.True(t, remoteConfig.Ingress.Rules[0].Config.H2cOrigin)
+	})
+
+	t.Run("per-rule h2cOrigin override", func(t *testing.T) {
+		rawConfig := []byte(`
+{
+    "ingress": [
+        {
+            "hostname": "grpc.example.com",
+            "service": "http://localhost:50051",
+            "originRequest": {"h2cOrigin": true}
+        },
+        {"service": "http_status:404"}
+    ]
+}`)
+		var remoteConfig RemoteConfig
+		err := json.Unmarshal(rawConfig, &remoteConfig)
+		require.NoError(t, err)
+		require.True(t, remoteConfig.Ingress.Rules[0].Config.H2cOrigin)
+		// Catch-all rule should not inherit per-rule h2cOrigin
+		require.False(t, remoteConfig.Ingress.Rules[1].Config.H2cOrigin)
+	})
+}
+
 func TestDefaultConfigFromCLI(t *testing.T) {
 	set := flag.NewFlagSet("contrive", 0)
 	c := cli.NewContext(nil, set, nil)

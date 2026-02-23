@@ -229,6 +229,8 @@ type OriginRequestConfig struct {
 	IPRules []IngressIPRule `yaml:"ipRules" json:"ipRules,omitempty"`
 	// Attempt to connect to origin with HTTP/2
 	Http2Origin *bool `yaml:"http2Origin" json:"http2Origin,omitempty"`
+	// Connect to origin with HTTP/2 over cleartext (h2c), without TLS
+	H2cOrigin *bool `yaml:"h2cOrigin" json:"h2cOrigin,omitempty"`
 	// Access holds all access related configs
 	Access *AccessConfig `yaml:"access" json:"access,omitempty"`
 }
