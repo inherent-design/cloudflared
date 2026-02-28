@@ -229,7 +229,7 @@ func (q *quicConnection) dispatchRequest(ctx context.Context, stream *rpcquic.Re
 		if err != nil {
 			return err, false
 		}
-		w := newHTTPResponseAdapter(stream)
+		w := newHTTPResponseAdapter(stream, q.logger)
 		return originProxy.ProxyHTTP(&w, tracedReq, request.Type == pogs.ConnectionTypeWebsocket), w.connectResponseSent
 
 	case pogs.ConnectionTypeTCP:
@@ -277,14 +277,19 @@ type httpResponseAdapter struct {
 	*rpcquic.RequestServerStream
 	headers             http.Header
 	connectResponseSent bool
+	logger              *zerolog.Logger
 }
 
-func newHTTPResponseAdapter(s *rpcquic.RequestServerStream) httpResponseAdapter {
-	return httpResponseAdapter{RequestServerStream: s, headers: make(http.Header)}
+func newHTTPResponseAdapter(s *rpcquic.RequestServerStream, log *zerolog.Logger) httpResponseAdapter {
+	return httpResponseAdapter{RequestServerStream: s, headers: make(http.Header), logger: log}
 }
 
 func (hrw *httpResponseAdapter) AddTrailer(trailerName, trailerValue string) {
-	// we do not support trailers over QUIC
+	// QUIC transport does not support trailers — they are silently dropped.
+	// This primarily affects gRPC, which encodes grpc-status in trailers.
+	hrw.logger.Warn().Str("trailerName", trailerName).
+		Msg("QUIC transport does not support trailers; trailer will be dropped. " +
+			"For gRPC origins, use --protocol http2 to enable trailer support")
 }
 
 func (hrw *httpResponseAdapter) WriteRespHeaders(status int, header http.Header) error {
