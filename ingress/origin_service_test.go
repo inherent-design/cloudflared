@@ -31,6 +31,7 @@ func TestAddPortIfMissing(t *testing.T) {
 }
 
 func TestHttp2OriginWithHTTPSchemeWarning(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		scheme      string
@@ -44,12 +45,15 @@ func TestHttp2OriginWithHTTPSchemeWarning(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			var buf bytes.Buffer
 			log := zerolog.New(&buf)
 			svc := &httpService{url: &url.URL{Scheme: tt.scheme, Host: "localhost:8080"}}
-			cfg := OriginRequestConfig{Http2Origin: tt.http2Origin}
-			// start() will fail at TLS cert loading for https, that's expected for this test
-			_ = svc.start(&log, nil, cfg)
+			cfg := OriginRequestConfig{
+				Http2Origin: tt.http2Origin,
+				NoTLSVerify: true,
+			}
+			require.NoError(t, svc.start(&log, nil, cfg))
 			if tt.wantWarning {
 				require.Contains(t, buf.String(), "http2Origin is enabled")
 			} else {

@@ -902,6 +902,7 @@ func GenerateTLSConfig() *tls.Config {
 }
 
 func TestHTTPResponseAdapterAddTrailerLogs(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		trailerName  string
@@ -913,6 +914,7 @@ func TestHTTPResponseAdapterAddTrailerLogs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			var buf bytes.Buffer
 			log := zerolog.New(&buf)
 			adapter := newHTTPResponseAdapter(nil, &log)
