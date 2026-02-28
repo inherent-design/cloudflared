@@ -35,7 +35,7 @@ var (
 	defaultUserConfigDirs = []string{"~/.cloudflared", "~/.cloudflare-warp", "~/cloudflare-warp"}
 	defaultNixConfigDirs  = []string{"/etc/cloudflared", DefaultUnixConfigLocation}
 
-	ErrNoConfigFile = fmt.Errorf("Cannot determine default configuration path. No file %v in %v", DefaultConfigFiles, DefaultConfigSearchDirectories())
+	ErrNoConfigFile = fmt.Errorf("cannot determine default configuration path. No file %v in %v", DefaultConfigFiles, DefaultConfigSearchDirectories())
 )
 
 const (
@@ -44,6 +44,8 @@ const (
 )
 
 // DefaultConfigDirectory returns the default directory of the config file
+//
+//nolint:gosec // Config path can be controlled by environment on Windows by design.
 func DefaultConfigDirectory() string {
 	if runtime.GOOS == "windows" {
 		path := os.Getenv("CFDPATH")
@@ -87,7 +89,7 @@ func DefaultConfigSearchDirectories() []string {
 
 // FileExists checks to see if a file exist at the provided path.
 func FileExists(path string) (bool, error) {
-	f, err := os.Open(path)
+	_, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// ignore missing files
@@ -95,7 +97,6 @@ func FileExists(path string) (bool, error) {
 		}
 		return false, err
 	}
-	_ = f.Close()
 	return true, nil
 }
 
@@ -120,6 +121,8 @@ func FindDefaultConfigPath() string {
 
 // FindOrCreateConfigPath returns the first path that contains a config file
 // or creates one in the primary default path if it doesn't exist
+//
+//nolint:gosec // Config and log paths are local user-controlled paths by design.
 func FindOrCreateConfigPath() string {
 	path := FindDefaultConfigPath()
 
@@ -135,7 +138,7 @@ func FindOrCreateConfigPath() string {
 		if err != nil {
 			return ""
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		logDir := DefaultLogDirectory()
 		_ = os.MkdirAll(logDir, os.ModePerm) // try and create it. Doesn't matter if it succeed or not, only byproduct will be no logs
@@ -229,6 +232,8 @@ type OriginRequestConfig struct {
 	IPRules []IngressIPRule `yaml:"ipRules" json:"ipRules,omitempty"`
 	// Attempt to connect to origin with HTTP/2
 	Http2Origin *bool `yaml:"http2Origin" json:"http2Origin,omitempty"`
+	// Connect to origin with HTTP/2 over cleartext (h2c), without TLS
+	H2cOrigin *bool `yaml:"h2cOrigin" json:"h2cOrigin,omitempty"`
 	// Access holds all access related configs
 	Access *AccessConfig `yaml:"access" json:"access,omitempty"`
 }
@@ -381,6 +386,8 @@ func GetConfiguration() *Configuration {
 // ReadConfigFile returns InputSourceContext initialized from the configuration file.
 // On repeat calls returns with the same file, returns without reading the file again; however,
 // if value of "config" flag changes, will read the new config file
+//
+//nolint:gosec // User-supplied config path is expected for this CLI.
 func ReadConfigFile(c *cli.Context, log *zerolog.Logger) (settings *configFileSettings, warnings string, err error) {
 	configFile := c.String("config")
 	if configuration.Source() == configFile || configFile == "" {
@@ -399,7 +406,7 @@ func ReadConfigFile(c *cli.Context, log *zerolog.Logger) (settings *configFileSe
 		}
 		return nil, "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	if err := yaml.NewDecoder(file).Decode(&configuration); err != nil {
 		if err == io.EOF {
 			log.Error().Msgf("Configuration file %s was empty", configFile)
@@ -411,6 +418,7 @@ func ReadConfigFile(c *cli.Context, log *zerolog.Logger) (settings *configFileSe
 
 	// Parse it again, with strict mode, to find warnings.
 	if file, err := os.Open(configFile); err == nil {
+		defer func() { _ = file.Close() }()
 		decoder := yaml.NewDecoder(file)
 		decoder.KnownFields(true)
 		var unusedConfig configFileSettings
@@ -432,7 +440,7 @@ type CustomDuration struct {
 }
 
 func (s CustomDuration) MarshalJSON() ([]byte, error) {
-	return json.Marshal(s.Duration.Seconds())
+	return json.Marshal(s.Seconds())
 }
 
 func (s *CustomDuration) UnmarshalJSON(data []byte) error {
@@ -446,7 +454,7 @@ func (s *CustomDuration) UnmarshalJSON(data []byte) error {
 }
 
 func (s *CustomDuration) MarshalYAML() (interface{}, error) {
-	return s.Duration.String(), nil
+	return s.String(), nil
 }
 
 func (s *CustomDuration) UnmarshalYAML(unmarshal func(interface{}) error) error {

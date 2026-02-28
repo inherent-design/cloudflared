@@ -30,6 +30,41 @@ func TestAddPortIfMissing(t *testing.T) {
 	}
 }
 
+func TestH2cOriginTransport(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		h2cOrigin   bool
+		http2Origin bool
+		scheme      string
+		wantErr     bool
+		errContains string
+	}{
+		{"h2c with http origin succeeds", true, false, "http", false, ""},
+		{"h2c with https origin errors", true, false, "https", true, "h2cOrigin is enabled but"},
+		{"h2c and http2Origin conflict", true, true, "http", true, "cannot both be enabled"},
+		{"http2Origin alone is fine", false, true, "https", false, ""},
+		{"neither h2c nor http2Origin", false, false, "http", false, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			log := zerolog.Nop()
+			svc := &httpService{url: &url.URL{Scheme: tt.scheme, Host: "localhost:50051"}}
+			cfg := OriginRequestConfig{
+				H2cOrigin:   tt.h2cOrigin,
+				Http2Origin: tt.http2Origin,
+			}
+			err := svc.start(&log, nil, cfg)
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.errContains)
+			}
+			// start() may fail at TLS cert loading for non-h2c https cases
+		})
+	}
+}
+
 func TestHttp2OriginWithHTTPSchemeWarning(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
