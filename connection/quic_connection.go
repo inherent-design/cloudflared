@@ -285,7 +285,7 @@ func newHTTPResponseAdapter(s *rpcquic.RequestServerStream, log *zerolog.Logger)
 }
 
 func (hrw *httpResponseAdapter) AddTrailer(trailerName, trailerValue string) {
-	// QUIC transport does not support trailers — they are silently dropped.
+	// QUIC transport does not support trailers; they are silently dropped.
 	// This primarily affects gRPC, which encodes grpc-status in trailers.
 	hrw.logger.Warn().Str("trailerName", trailerName).
 		Msg("QUIC transport does not support trailers; trailer will be dropped. " +
