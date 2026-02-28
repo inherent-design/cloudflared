@@ -39,6 +39,7 @@ const (
 	ProxyAddressFlag              = "proxy-address"
 	ProxyPortFlag                 = "proxy-port"
 	Http2OriginFlag               = "http2-origin"
+	H2cOriginFlag                 = "h2c-origin"
 )
 
 const (
@@ -137,6 +138,7 @@ func originRequestFromSingleRule(c *cli.Context) OriginRequestConfig {
 	var proxyPort uint
 	var proxyType string
 	var http2Origin bool
+	var h2cOrigin bool
 	if flag := ProxyConnectTimeoutFlag; c.IsSet(flag) {
 		connectTimeout = config.CustomDuration{Duration: c.Duration(flag)}
 	}
@@ -187,6 +189,9 @@ func originRequestFromSingleRule(c *cli.Context) OriginRequestConfig {
 	if flag := Http2OriginFlag; c.IsSet(flag) {
 		http2Origin = c.Bool(flag)
 	}
+	if flag := H2cOriginFlag; c.IsSet(flag) {
+		h2cOrigin = c.Bool(flag)
+	}
 	if c.IsSet(Socks5Flag) {
 		proxyType = socksProxy
 	}
@@ -209,6 +214,7 @@ func originRequestFromSingleRule(c *cli.Context) OriginRequestConfig {
 		ProxyPort:              proxyPort,
 		ProxyType:              proxyType,
 		Http2Origin:            http2Origin,
+		H2cOrigin:              h2cOrigin,
 	}
 }
 
@@ -280,6 +286,9 @@ func originRequestFromConfig(c config.OriginRequestConfig) OriginRequestConfig {
 	if c.Http2Origin != nil {
 		out.Http2Origin = *c.Http2Origin
 	}
+	if c.H2cOrigin != nil {
+		out.H2cOrigin = *c.H2cOrigin
+	}
 	if c.Access != nil {
 		out.Access = *c.Access
 	}
@@ -330,6 +339,8 @@ type OriginRequestConfig struct {
 	IPRules []ipaccess.Rule `yaml:"ipRules" json:"ipRules"`
 	// Attempt to connect to origin with HTTP/2
 	Http2Origin bool `yaml:"http2Origin" json:"http2Origin"`
+	// Connect to origin with HTTP/2 over cleartext (h2c), without TLS
+	H2cOrigin bool `yaml:"h2cOrigin" json:"h2cOrigin"`
 
 	// Access holds all access related configs
 	Access config.AccessConfig `yaml:"access" json:"access,omitempty"`
@@ -450,6 +461,12 @@ func (defaults *OriginRequestConfig) setHttp2Origin(overrides config.OriginReque
 	}
 }
 
+func (defaults *OriginRequestConfig) setH2cOrigin(overrides config.OriginRequestConfig) {
+	if val := overrides.H2cOrigin; val != nil {
+		defaults.H2cOrigin = *val
+	}
+}
+
 func (defaults *OriginRequestConfig) setAccess(overrides config.OriginRequestConfig) {
 	if val := overrides.Access; val != nil {
 		defaults.Access = *val
@@ -484,6 +501,7 @@ func setConfig(defaults OriginRequestConfig, overrides config.OriginRequestConfi
 	cfg.setProxyType(overrides)
 	cfg.setIPRules(overrides)
 	cfg.setHttp2Origin(overrides)
+	cfg.setH2cOrigin(overrides)
 	cfg.setAccess(overrides)
 
 	return cfg
@@ -539,6 +557,7 @@ func ConvertToRawOriginConfig(c OriginRequestConfig) config.OriginRequestConfig 
 		ProxyType:              emptyStringToNil(c.ProxyType),
 		IPRules:                convertToRawIPRules(c.IPRules),
 		Http2Origin:            defaultBoolToNil(c.Http2Origin),
+		H2cOrigin:              defaultBoolToNil(c.H2cOrigin),
 		Access:                 access,
 	}
 }
