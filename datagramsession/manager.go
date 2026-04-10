@@ -96,7 +96,8 @@ func (m *manager) shutdownSessions(err error) {
 	}
 	closeSessionErr := &errClosedSession{
 		message: err.Error(),
-		// Usually connection with remote has been closed, so set this to true to skip unregistering from remote
+		// Manager shutdown usually means the connection with remote is already collapsing, so surface it as remote
+		// closure to suppress duplicate unregister attempts while connection teardown is already in progress.
 		byRemote: true,
 	}
 	for _, s := range m.sessions {
