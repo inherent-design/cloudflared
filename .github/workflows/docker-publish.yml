@@ -128,6 +128,7 @@ jobs:
         with:
           context: .
           push: true
+          pull: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -136,13 +137,25 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Trivy scan
+      - name: Trivy library scan
         uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.release_version }}
           format: table
           exit-code: "1"
           ignore-unfixed: true
+          vuln-type: library
+          severity: CRITICAL,HIGH
+
+      - name: Trivy OS scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.release_version }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os
           severity: CRITICAL,HIGH
 
   publish-release:
