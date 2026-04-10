@@ -165,37 +165,46 @@ func TestUnregisterSessionCloseSession(t *testing.T) {
 	<-managerDone
 }
 
-func TestManagerCtxDoneCloseSessions(t *testing.T) {
+func TestManagerShutdownClosesSessionsAsRemote(t *testing.T) {
 	sessionID := uuid.New()
-	payload := []byte(t.Name())
-	sender := newMockTransportSender(sessionID, payload)
-	mg := NewManager(&nopLogger, sender.muxSession, nil)
-	ctx, cancel := context.WithCancel(context.Background())
+	mg := NewManager(&nopLogger, nil, nil)
+	managerCtx, cancelManager := context.WithCancel(t.Context())
+	sessionCtx := t.Context()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		err := mg.Serve(ctx)
-		require.Error(t, err)
+		err := mg.Serve(managerCtx)
+		require.ErrorIs(t, err, context.Canceled)
 	}()
 
 	cfdConn, originConn := net.Pipe()
-	session, err := mg.RegisterSession(ctx, sessionID, cfdConn)
+	defer originConn.Close()
+	session, err := mg.RegisterSession(sessionCtx, sessionID, cfdConn)
 	require.NoError(t, err)
 	require.NotNil(t, session)
 
-	wg.Add(1)
+	type sessionResult struct {
+		closedByRemote bool
+		err            error
+	}
+	results := make(chan sessionResult, 1)
 	go func() {
-		defer wg.Done()
-		_, err := originConn.Write(payload)
-		require.NoError(t, err)
-		cancel()
+		closedByRemote, err := session.Serve(sessionCtx, time.Minute)
+		results <- sessionResult{
+			closedByRemote: closedByRemote,
+			err:            err,
+		}
 	}()
 
-	closedByRemote, err := session.Serve(ctx, time.Minute)
-	require.False(t, closedByRemote)
-	require.Error(t, err)
+	cancelManager()
+	result := <-results
+	require.True(t, result.closedByRemote)
+	require.Equal(t, &errClosedSession{
+		message:  context.Canceled.Error(),
+		byRemote: true,
+	}, result.err)
 
 	wg.Wait()
 }
