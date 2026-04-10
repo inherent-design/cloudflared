@@ -1,5 +1,7 @@
 # use a builder image for building cloudflare
-FROM golang:1.26.0 AS builder
+ARG VERSION
+FROM golang:1.26.2 AS builder
+ARG VERSION
 ENV GO111MODULE=on \
   CGO_ENABLED=0 \
   # the CONTAINER_BUILD envvar is used set github.com/cloudflare/cloudflared/metrics.Runtime=virtual
@@ -12,7 +14,7 @@ WORKDIR /go/src/github.com/cloudflare/cloudflared/
 COPY . .
 
 # compile cloudflared
-RUN GOOS=linux GOARCH=arm64 make cloudflared
+RUN GOOS=linux GOARCH=arm64 make VERSION=${VERSION} cloudflared
 
 # use a distroless base image with glibc
 FROM gcr.io/distroless/base-debian13:nonroot-arm64
