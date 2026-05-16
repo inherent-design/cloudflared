@@ -516,6 +516,18 @@ ingress:
    service: unix:/tmp/cloudflared-h2c-test.sock
 `,
 		},
+		{
+			name: "h2c with hello world errors",
+			rawYAML: `
+originRequest:
+  h2cOrigin: true
+ingress:
+ - hostname: "*"
+   service: hello_world
+`,
+			wantErr:     true,
+			errContains: "h2cOrigin is enabled",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

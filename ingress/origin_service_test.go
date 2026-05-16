@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/http2"
+
+	"github.com/cloudflare/cloudflared/config"
 )
 
 func TestAddPortIfMissing(t *testing.T) {
@@ -76,6 +80,32 @@ func TestUnixSocketH2cOriginConflict(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "cannot both be enabled")
+}
+
+func TestH2cOriginTransportUsesKeepAliveTimeout(t *testing.T) {
+	t.Parallel()
+	log := zerolog.Nop()
+	svc := &httpService{url: &url.URL{Scheme: "http", Host: "localhost:50051"}}
+	err := svc.start(&log, nil, OriginRequestConfig{
+		H2cOrigin:        true,
+		KeepAliveTimeout: config.CustomDuration{Duration: 42 * time.Second},
+	})
+	require.NoError(t, err)
+
+	transport, ok := svc.transport.(*http2.Transport)
+	require.True(t, ok)
+	require.Equal(t, 42*time.Second, transport.ReadIdleTimeout)
+}
+
+func TestHelloWorldRejectsH2cOrigin(t *testing.T) {
+	t.Parallel()
+	log := zerolog.Nop()
+	svc := &helloWorld{}
+	err := svc.start(&log, make(chan struct{}), OriginRequestConfig{
+		H2cOrigin: true,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "h2cOrigin is enabled")
 }
 
 func TestHttp2OriginWithHTTPSchemeWarning(t *testing.T) {

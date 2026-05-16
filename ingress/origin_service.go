@@ -114,6 +114,8 @@ func validateHTTPOriginConfig(service OriginService, cfg OriginRequestConfig) er
 			scheme = service.url.Scheme
 		}
 		return validateHTTPOriginScheme(scheme, cfg)
+	case *helloWorld:
+		return validateHTTPOriginScheme("https", cfg)
 	case *unixSocketPath:
 		return validateHTTPOriginScheme(service.scheme, cfg)
 	default:
@@ -264,6 +266,9 @@ func (o *helloWorld) start(
 	shutdownC <-chan struct{},
 	cfg OriginRequestConfig,
 ) error {
+	if err := validateHTTPOriginScheme("https", cfg); err != nil {
+		return err
+	}
 	if err := o.httpService.start(log, shutdownC, cfg); err != nil {
 		return err
 	}
@@ -407,7 +412,8 @@ func newHTTPTransport(service OriginService, cfg OriginRequestConfig, log *zerol
 	if cfg.H2cOrigin {
 		log.Info().Msg("h2cOrigin enabled: using HTTP/2 cleartext transport")
 		return &http2.Transport{
-			AllowHTTP: true,
+			AllowHTTP:       true,
+			ReadIdleTimeout: cfg.KeepAliveTimeout.Duration,
 			DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
 				return dialContext(ctx, network, addr)
 			},
