@@ -59,10 +59,23 @@ func TestH2cOriginTransport(t *testing.T) {
 			if tt.wantErr {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), tt.errContains)
+			} else {
+				require.NoError(t, err)
 			}
-			// start() may fail at TLS cert loading for non-h2c https cases
 		})
 	}
+}
+
+func TestUnixSocketH2cOriginConflict(t *testing.T) {
+	t.Parallel()
+	log := zerolog.Nop()
+	svc := &unixSocketPath{path: "/tmp/cloudflared-h2c-test.sock", scheme: "http"}
+	err := svc.start(&log, nil, OriginRequestConfig{
+		H2cOrigin:   true,
+		Http2Origin: true,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot both be enabled")
 }
 
 func TestHttp2OriginWithHTTPSchemeWarning(t *testing.T) {
