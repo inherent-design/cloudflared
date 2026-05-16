@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 	"testing"
 	"time"
 
@@ -40,10 +39,9 @@ func TestManagerServe(t *testing.T) {
 	mg := NewManager(&nopLogger, transport.MuxSession, requestChan)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	serveDone := make(chan struct{})
+	serveErr := make(chan error, 1)
 	go func(ctx context.Context) {
-		mg.Serve(ctx)
-		close(serveDone)
+		serveErr <- mg.Serve(ctx)
 	}(ctx)
 
 	errGroup, ctx := errgroup.WithContext(ctx)
@@ -82,30 +80,38 @@ func TestManagerServe(t *testing.T) {
 				return eyeball.serve(reqCtx, requestChan)
 			})
 
-			sessionDone := make(chan struct{})
+			sessionDone := make(chan struct {
+				closedByRemote bool
+				err            error
+			}, 1)
 			go func() {
 				closedByRemote, err := session.Serve(ctx, time.Minute*2)
-				closeSession := &errClosedSession{
-					message:  remoteUnregisterMsg,
-					byRemote: true,
+				sessionDone <- struct {
+					closedByRemote bool
+					err            error
+				}{
+					closedByRemote: closedByRemote,
+					err:            err,
 				}
-				require.Equal(t, closeSession, err)
-				require.True(t, closedByRemote)
-				close(sessionDone)
 			}()
 
 			// Make sure eyeball and origin have received all messages before unregistering the session
 			require.NoError(t, reqErrGroup.Wait())
 
 			require.NoError(t, mg.UnregisterSession(ctx, sID, remoteUnregisterMsg, true))
-			<-sessionDone
+			result := <-sessionDone
+			require.Equal(t, &errClosedSession{
+				message:  remoteUnregisterMsg,
+				byRemote: true,
+			}, result.err)
+			require.True(t, result.closedByRemote)
 			return nil
 		})
 	}
 
 	require.NoError(t, errGroup.Wait())
 	cancel()
-	<-serveDone
+	require.ErrorIs(t, <-serveErr, context.Canceled)
 }
 
 func TestTimeout(t *testing.T) {
@@ -133,11 +139,9 @@ func TestUnregisterSessionCloseSession(t *testing.T) {
 	mg := NewManager(&nopLogger, sender.muxSession, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	managerDone := make(chan struct{})
+	managerDone := make(chan error, 1)
 	go func() {
-		err := mg.Serve(ctx)
-		require.Error(t, err)
-		close(managerDone)
+		managerDone <- mg.Serve(ctx)
 	}()
 
 	cfdConn, originConn := net.Pipe()
@@ -145,24 +149,25 @@ func TestUnregisterSessionCloseSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 
-	unregisteredChan := make(chan struct{})
+	unregisteredChan := make(chan error, 1)
 	go func() {
 		_, err := originConn.Write(payload)
-		require.NoError(t, err)
+		if err != nil {
+			unregisteredChan <- err
+			return
+		}
 
 		err = mg.UnregisterSession(ctx, sessionID, "eyeball closed session", true)
-		require.NoError(t, err)
-
-		close(unregisteredChan)
+		unregisteredChan <- err
 	}()
 
 	closedByRemote, err := session.Serve(ctx, time.Minute)
 	require.True(t, closedByRemote)
 	require.Error(t, err)
 
-	<-unregisteredChan
+	require.NoError(t, <-unregisteredChan)
 	cancel()
-	<-managerDone
+	require.ErrorIs(t, <-managerDone, context.Canceled)
 }
 
 func TestManagerShutdownClosesSessionsAsRemote(t *testing.T) {
@@ -171,16 +176,13 @@ func TestManagerShutdownClosesSessionsAsRemote(t *testing.T) {
 	managerCtx, cancelManager := context.WithCancel(t.Context())
 	sessionCtx := t.Context()
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	managerDone := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		err := mg.Serve(managerCtx)
-		require.ErrorIs(t, err, context.Canceled)
+		managerDone <- mg.Serve(managerCtx)
 	}()
 
 	cfdConn, originConn := net.Pipe()
-	defer originConn.Close()
+	defer func() { require.NoError(t, originConn.Close()) }()
 	session, err := mg.RegisterSession(sessionCtx, sessionID, cfdConn)
 	require.NoError(t, err)
 	require.NotNil(t, session)
@@ -206,7 +208,7 @@ func TestManagerShutdownClosesSessionsAsRemote(t *testing.T) {
 		byRemote: true,
 	}, result.err)
 
-	wg.Wait()
+	require.ErrorIs(t, <-managerDone, context.Canceled)
 }
 
 type mockOrigin struct {
@@ -274,7 +276,6 @@ func (me *mockEyeballSession) serve(ctx context.Context, requestChan chan *packe
 		if !bytes.Equal(resp, me.expectedResponse) {
 			return fmt.Errorf("Expect %v, read %v", me.expectedResponse, resp)
 		}
-		fmt.Println("Resp", resp)
 	}
 	return nil
 }
