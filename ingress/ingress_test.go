@@ -463,6 +463,74 @@ ingress:
 	}
 }
 
+func TestParseIngressRejectsInvalidH2cOriginConfig(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		rawYAML     string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "h2c with http origin succeeds",
+			rawYAML: `
+originRequest:
+  h2cOrigin: true
+ingress:
+ - hostname: "*"
+   service: http://localhost:50051
+`,
+		},
+		{
+			name: "h2c and http2Origin conflict",
+			rawYAML: `
+originRequest:
+  h2cOrigin: true
+  http2Origin: true
+ingress:
+ - hostname: "*"
+   service: http://localhost:50051
+`,
+			wantErr:     true,
+			errContains: "cannot both be enabled",
+		},
+		{
+			name: "h2c with https origin errors",
+			rawYAML: `
+originRequest:
+  h2cOrigin: true
+ingress:
+ - hostname: "*"
+   service: https://localhost:50051
+`,
+			wantErr:     true,
+			errContains: "h2cOrigin is enabled",
+		},
+		{
+			name: "h2c with unix socket succeeds",
+			rawYAML: `
+originRequest:
+  h2cOrigin: true
+ingress:
+ - hostname: "*"
+   service: unix:/tmp/cloudflared-h2c-test.sock
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseIngress(MustReadIngress(tt.rawYAML))
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.errContains)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func ipRulePrefix(s string) *string {
 	return &s
 }
@@ -555,7 +623,7 @@ func TestSingleOriginServices(t *testing.T) {
 		flagSet.String("unix-socket", "", "")
 		cliCtx := cli.NewContext(cli.NewApp(), flagSet, nil)
 		for i := 0; i < len(params); i += 2 {
-			cliCtx.Set(params[i], params[i+1])
+			require.NoError(t, cliCtx.Set(params[i], params[i+1]))
 		}
 
 		return cliCtx
@@ -605,7 +673,7 @@ func TestSingleOriginServices(t *testing.T) {
 			if test.err != nil {
 				return
 			}
-			require.Equal(t, 1, len(ingress.Rules))
+			require.Len(t, ingress.Rules, 1)
 			rule := ingress.Rules[0]
 			require.Equal(t, test.expectedService, rule.Service)
 		})
@@ -626,7 +694,7 @@ func TestSingleOriginServices_URL(t *testing.T) {
 		flagSet := flag.NewFlagSet(t.Name(), flag.PanicOnError)
 		flagSet.String("url", "", "")
 		cliCtx := cli.NewContext(cli.NewApp(), flagSet, nil)
-		cliCtx.Set(param, value)
+		require.NoError(t, cliCtx.Set(param, value))
 		return cliCtx
 	}
 
@@ -636,7 +704,7 @@ func TestSingleOriginServices_URL(t *testing.T) {
 			url := urlMustParse(test + host)
 			ingress, err := parseCLIIngress(newCli("url", url.String()), false)
 			require.NoError(t, err)
-			require.Equal(t, 1, len(ingress.Rules))
+			require.Len(t, ingress.Rules, 1)
 			rule := ingress.Rules[0]
 			require.Equal(t, &httpService{url: url}, rule.Service)
 		})
@@ -648,7 +716,7 @@ func TestSingleOriginServices_URL(t *testing.T) {
 			url := urlMustParse(test + host)
 			ingress, err := parseCLIIngress(newCli("url", url.String()), false)
 			require.NoError(t, err)
-			require.Equal(t, 1, len(ingress.Rules))
+			require.Len(t, ingress.Rules, 1)
 			rule := ingress.Rules[0]
 			require.Equal(t, newTCPOverWSService(url), rule.Service)
 		})
@@ -712,7 +780,7 @@ func TestFindMatchingRule(t *testing.T) {
 
 	for _, test := range tests {
 		_, ruleIndex := ingress.FindMatchingRule(test.host, test.path)
-		assert.Equal(t, test.wantRuleIndex, ruleIndex, fmt.Sprintf("Expect host=%s, path=%s to match rule %d, got %d", test.host, test.path, test.wantRuleIndex, ruleIndex))
+		assert.Equal(t, test.wantRuleIndex, ruleIndex, "Expect host=%s, path=%s to match rule %d, got %d", test.host, test.path, test.wantRuleIndex, ruleIndex)
 	}
 }
 
