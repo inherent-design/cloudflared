@@ -455,6 +455,17 @@ func TestDefaultConfigFromCLI(t *testing.T) {
 	require.Equal(t, expected, actual)
 }
 
+func TestH2cOriginFromCLI(t *testing.T) {
+	t.Parallel()
+	set := flag.NewFlagSet("contrive", flag.PanicOnError)
+	set.Bool(H2cOriginFlag, false, "")
+	require.NoError(t, set.Parse([]string{"--" + H2cOriginFlag}))
+	c := cli.NewContext(nil, set, nil)
+
+	actual := originRequestFromSingleRule(c)
+	require.True(t, actual.H2cOrigin)
+}
+
 func newIPRule(t *testing.T, prefix string, ports []int, allow bool) ipaccess.Rule {
 	rule, err := ipaccess.NewRuleByCIDR(&prefix, ports, allow)
 	require.NoError(t, err)

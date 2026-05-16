@@ -56,6 +56,9 @@ func (o *unixSocketPath) String() string {
 }
 
 func (o *unixSocketPath) start(log *zerolog.Logger, _ <-chan struct{}, cfg OriginRequestConfig) error {
+	if err := validateHTTPOriginConfig(o, cfg); err != nil {
+		return err
+	}
 	transport, err := newHTTPTransport(o, cfg, log)
 	if err != nil {
 		return err
@@ -76,19 +79,14 @@ type httpService struct {
 }
 
 func (o *httpService) start(log *zerolog.Logger, _ <-chan struct{}, cfg OriginRequestConfig) error {
-	if cfg.Http2Origin && o.url.Scheme == "http" {
+	if err := validateHTTPOriginConfig(o, cfg); err != nil {
+		return err
+	}
+	if cfg.Http2Origin && o.url != nil && o.url.Scheme == "http" {
 		log.Warn().Str("origin", o.url.String()).
 			Msg("http2Origin is enabled but the origin URL uses http:// (not https://). " +
 				"HTTP/2 requires TLS, so the connection will fall back to HTTP/1.1. " +
 				"Use an https:// origin URL or disable http2Origin")
-	}
-	if cfg.H2cOrigin && cfg.Http2Origin {
-		return fmt.Errorf("h2cOrigin and http2Origin cannot both be enabled; " +
-			"h2cOrigin is for cleartext HTTP/2 (http://), http2Origin is for TLS HTTP/2 (https://)")
-	}
-	if cfg.H2cOrigin && o.url.Scheme == "https" {
-		return fmt.Errorf("h2cOrigin is enabled but the origin URL uses https://; " +
-			"h2c is HTTP/2 over cleartext; use http:// or disable h2cOrigin")
 	}
 	transport, err := newHTTPTransport(o, cfg, log)
 	if err != nil {
@@ -106,6 +104,33 @@ func (o *httpService) String() string {
 
 func (o httpService) MarshalJSON() ([]byte, error) {
 	return json.Marshal(o.String())
+}
+
+func validateHTTPOriginConfig(service OriginService, cfg OriginRequestConfig) error {
+	switch service := service.(type) {
+	case *httpService:
+		scheme := ""
+		if service.url != nil {
+			scheme = service.url.Scheme
+		}
+		return validateHTTPOriginScheme(scheme, cfg)
+	case *unixSocketPath:
+		return validateHTTPOriginScheme(service.scheme, cfg)
+	default:
+		return nil
+	}
+}
+
+func validateHTTPOriginScheme(scheme string, cfg OriginRequestConfig) error {
+	if cfg.H2cOrigin && cfg.Http2Origin {
+		return fmt.Errorf("h2cOrigin and http2Origin cannot both be enabled; " +
+			"h2cOrigin is for cleartext HTTP/2 (http://), http2Origin is for TLS HTTP/2 (https://)")
+	}
+	if cfg.H2cOrigin && scheme == "https" {
+		return fmt.Errorf("h2cOrigin is enabled but the origin uses https://; " +
+			"h2c is HTTP/2 over cleartext; use http:// or disable h2cOrigin")
+	}
+	return nil
 }
 
 // rawTCPService dials TCP to the destination specified by the client
