@@ -50,7 +50,7 @@ type manager struct {
 	closedChan         <-chan struct{}
 	sessions           map[uuid.UUID]*Session
 	log                *zerolog.Logger
-	// timeout waiting for an API to finish. This can be overriden in test
+	// timeout waiting for an API to finish. This can be overridden in test
 	timeout time.Duration
 }
 
@@ -188,5 +188,5 @@ func (m *manager) sendToSession(datagram *packet.Session) {
 	}
 	// session writes to destination over a connected UDP socket, which should not be blocking, so this call doesn't
 	// need to run in another go routine
-	session.transportToDst(datagram.Payload)
+	_, _ = session.transportToDst(datagram.Payload)
 }
