@@ -128,9 +128,9 @@ func validateHTTPOriginScheme(scheme string, cfg OriginRequestConfig) error {
 		return fmt.Errorf("h2cOrigin and http2Origin cannot both be enabled; " +
 			"h2cOrigin is for cleartext HTTP/2 (http://), http2Origin is for TLS HTTP/2 (https://)")
 	}
-	if cfg.H2cOrigin && scheme == "https" {
-		return fmt.Errorf("h2cOrigin is enabled but the origin uses https://; " +
-			"h2c is HTTP/2 over cleartext; use http:// or disable h2cOrigin")
+	if cfg.H2cOrigin && (scheme == "https" || scheme == "wss") {
+		return fmt.Errorf("h2cOrigin is enabled but the origin uses %s://; "+
+			"h2c is HTTP/2 over cleartext; use http:// or ws:// or disable h2cOrigin", scheme)
 	}
 	return nil
 }

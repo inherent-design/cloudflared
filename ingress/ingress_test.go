@@ -507,6 +507,18 @@ ingress:
 			errContains: "h2cOrigin is enabled",
 		},
 		{
+			name: "h2c with wss origin errors",
+			rawYAML: `
+originRequest:
+  h2cOrigin: true
+ingress:
+ - hostname: "*"
+   service: wss://localhost:50051
+`,
+			wantErr:     true,
+			errContains: "wss://",
+		},
+		{
 			name: "h2c with unix socket succeeds",
 			rawYAML: `
 originRequest:

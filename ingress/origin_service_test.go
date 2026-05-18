@@ -45,7 +45,8 @@ func TestH2cOriginTransport(t *testing.T) {
 		errContains string
 	}{
 		{"h2c with http origin succeeds", true, false, "http", false, ""},
-		{"h2c with https origin errors", true, false, "https", true, "h2cOrigin is enabled but"},
+		{"h2c with https origin errors", true, false, "https", true, "https://"},
+		{"h2c with wss origin errors", true, false, "wss", true, "wss://"},
 		{"h2c and http2Origin conflict", true, true, "http", true, "cannot both be enabled"},
 		{"http2Origin alone is fine", false, true, "https", false, ""},
 		{"neither h2c nor http2Origin", false, false, "http", false, ""},
