@@ -991,3 +991,22 @@ func GenerateTLSConfig() *tls.Config {
 		NextProtos:   []string{"argotunnel"},
 	}
 }
+
+func TestHTTPResponseAdapterAddTrailerLogsOnce(t *testing.T) {
+	quicTrailerDropWarningLogged.Store(false)
+	t.Cleanup(func() {
+		quicTrailerDropWarningLogged.Store(false)
+	})
+
+	var buf bytes.Buffer
+	log := zerolog.New(&buf)
+	adapter := newHTTPResponseAdapter(nil, &log)
+
+	adapter.AddTrailer("grpc-status", "0")
+	require.Contains(t, buf.String(), "QUIC transport does not support trailers")
+	require.Contains(t, buf.String(), "grpc-status")
+
+	adapter.AddTrailer("grpc-message", "OK")
+	require.Equal(t, 1, strings.Count(buf.String(), "QUIC transport does not support trailers"))
+	require.NotContains(t, buf.String(), "grpc-message")
+}

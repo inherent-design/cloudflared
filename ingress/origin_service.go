@@ -75,6 +75,12 @@ type httpService struct {
 }
 
 func (o *httpService) start(log *zerolog.Logger, _ <-chan struct{}, cfg OriginRequestConfig) error {
+	if cfg.Http2Origin && o.url.Scheme == "http" {
+		log.Warn().Str("origin", o.url.String()).
+			Msg("http2Origin is enabled but the origin URL uses http:// (not https://). " +
+				"HTTP/2 requires TLS, so the connection will fall back to HTTP/1.1. " +
+				"Use an https:// origin URL or disable http2Origin")
+	}
 	transport, err := newHTTPTransport(o, cfg, log)
 	if err != nil {
 		return err
