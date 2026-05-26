@@ -14,6 +14,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
+	"golang.org/x/net/http2"
 
 	"github.com/cloudflare/cloudflared/hello"
 	"github.com/cloudflare/cloudflared/ipaccess"
@@ -43,7 +44,7 @@ type OriginService interface {
 type unixSocketPath struct {
 	path      string
 	scheme    string
-	transport *http.Transport
+	transport http.RoundTripper
 }
 
 func (o *unixSocketPath) String() string {
@@ -55,6 +56,9 @@ func (o *unixSocketPath) String() string {
 }
 
 func (o *unixSocketPath) start(log *zerolog.Logger, _ <-chan struct{}, cfg OriginRequestConfig) error {
+	if err := validateHTTPOriginConfig(o, cfg); err != nil {
+		return err
+	}
 	transport, err := newHTTPTransport(o, cfg, log)
 	if err != nil {
 		return err
@@ -70,11 +74,20 @@ func (o unixSocketPath) MarshalJSON() ([]byte, error) {
 type httpService struct {
 	url            *url.URL
 	hostHeader     string
-	transport      *http.Transport
+	transport      http.RoundTripper
 	matchSNIToHost bool
 }
 
 func (o *httpService) start(log *zerolog.Logger, _ <-chan struct{}, cfg OriginRequestConfig) error {
+	if err := validateHTTPOriginConfig(o, cfg); err != nil {
+		return err
+	}
+	if cfg.Http2Origin && o.url != nil && o.url.Scheme == "http" {
+		log.Warn().Str("origin", o.url.String()).
+			Msg("http2Origin is enabled but the origin URL uses http:// (not https://). " +
+				"HTTP/2 requires TLS, so the connection will fall back to HTTP/1.1. " +
+				"Use an https:// origin URL or disable http2Origin")
+	}
 	transport, err := newHTTPTransport(o, cfg, log)
 	if err != nil {
 		return err
@@ -93,13 +106,41 @@ func (o httpService) MarshalJSON() ([]byte, error) {
 	return json.Marshal(o.String())
 }
 
+func validateHTTPOriginConfig(service OriginService, cfg OriginRequestConfig) error {
+	switch service := service.(type) {
+	case *httpService:
+		scheme := ""
+		if service.url != nil {
+			scheme = service.url.Scheme
+		}
+		return validateHTTPOriginScheme(scheme, cfg)
+	case *helloWorld:
+		return validateHTTPOriginScheme("https", cfg)
+	case *unixSocketPath:
+		return validateHTTPOriginScheme(service.scheme, cfg)
+	default:
+		return nil
+	}
+}
+
+func validateHTTPOriginScheme(scheme string, cfg OriginRequestConfig) error {
+	if cfg.H2cOrigin && cfg.Http2Origin {
+		return fmt.Errorf("h2cOrigin and http2Origin cannot both be enabled; " +
+			"h2cOrigin is for cleartext HTTP/2 (http://), http2Origin is for TLS HTTP/2 (https://)")
+	}
+	if cfg.H2cOrigin && (scheme == "https" || scheme == "wss") {
+		return fmt.Errorf("h2cOrigin is enabled but the origin uses %s://; "+
+			"h2c is HTTP/2 over cleartext; use http:// or ws:// or disable h2cOrigin", scheme)
+	}
+	return nil
+}
+
 // rawTCPService dials TCP to the destination specified by the client
 // It's used by warp routing
 type rawTCPService struct {
 	name         string
 	dialer       net.Dialer
 	writeTimeout time.Duration
-	logger       *zerolog.Logger
 }
 
 func (o *rawTCPService) String() string {
@@ -225,6 +266,9 @@ func (o *helloWorld) start(
 	shutdownC <-chan struct{},
 	cfg OriginRequestConfig,
 ) error {
+	if err := validateHTTPOriginScheme("https", cfg); err != nil {
+		return err
+	}
 	if err := o.httpService.start(log, shutdownC, cfg); err != nil {
 		return err
 	}
@@ -233,10 +277,14 @@ func (o *helloWorld) start(
 	if err != nil {
 		return errors.Wrap(err, "Cannot start Hello World Server")
 	}
-	go hello.StartHelloWorldServer(log, helloListener, shutdownC)
+	go func() {
+		if err := hello.StartHelloWorldServer(log, helloListener, shutdownC); err != nil {
+			log.Error().Err(err).Msg("Cannot start Hello World Server")
+		}
+	}()
 	o.server = helloListener
 
-	o.httpService.url = &url.URL{
+	o.url = &url.URL{
 		Scheme: "https",
 		Host:   o.server.Addr().String(),
 	}
@@ -343,7 +391,35 @@ func (nrc *NopReadCloser) Close() error {
 	return nil
 }
 
-func newHTTPTransport(service OriginService, cfg OriginRequestConfig, log *zerolog.Logger) (*http.Transport, error) {
+func newHTTPTransport(service OriginService, cfg OriginRequestConfig, log *zerolog.Logger) (http.RoundTripper, error) {
+	dialer := &net.Dialer{
+		Timeout:   cfg.ConnectTimeout.Duration,
+		KeepAlive: cfg.TCPKeepAlive.Duration,
+	}
+	if cfg.NoHappyEyeballs {
+		dialer.FallbackDelay = -1 // As of Golang 1.12, a negative delay disables "happy eyeballs"
+	}
+
+	// DialContext depends on which kind of origin is being used.
+	dialContext := dialer.DialContext
+	if uds, ok := service.(*unixSocketPath); ok {
+		dialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "unix", uds.path)
+		}
+	}
+
+	// h2c: HTTP/2 over cleartext, no TLS cert loading needed
+	if cfg.H2cOrigin {
+		log.Info().Msg("h2cOrigin enabled: using HTTP/2 cleartext transport")
+		return &http2.Transport{
+			AllowHTTP:       true,
+			ReadIdleTimeout: cfg.KeepAliveTimeout.Duration,
+			DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+				return dialContext(ctx, network, addr)
+			},
+		}, nil
+	}
+
 	originCertPool, err := tlsconfig.LoadOriginCA(cfg.CAPool, log)
 	if err != nil {
 		return nil, errors.Wrap(err, "Error loading cert pool")
@@ -356,34 +432,13 @@ func newHTTPTransport(service OriginService, cfg OriginRequestConfig, log *zerol
 		IdleConnTimeout:       cfg.KeepAliveTimeout.Duration,
 		TLSHandshakeTimeout:   cfg.TLSTimeout.Duration,
 		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig:       &tls.Config{RootCAs: originCertPool, InsecureSkipVerify: cfg.NoTLSVerify},
-		ForceAttemptHTTP2:     cfg.Http2Origin,
+		//nolint:gosec // NoTLSVerify is a user-configurable origin transport option.
+		TLSClientConfig:   &tls.Config{RootCAs: originCertPool, InsecureSkipVerify: cfg.NoTLSVerify},
+		ForceAttemptHTTP2: cfg.Http2Origin,
+		DialContext:       dialContext,
 	}
 	if _, isHelloWorld := service.(*helloWorld); !isHelloWorld && cfg.OriginServerName != "" {
 		httpTransport.TLSClientConfig.ServerName = cfg.OriginServerName
-	}
-
-	dialer := &net.Dialer{
-		Timeout:   cfg.ConnectTimeout.Duration,
-		KeepAlive: cfg.TCPKeepAlive.Duration,
-	}
-	if cfg.NoHappyEyeballs {
-		dialer.FallbackDelay = -1 // As of Golang 1.12, a negative delay disables "happy eyeballs"
-	}
-
-	// DialContext depends on which kind of origin is being used.
-	dialContext := dialer.DialContext
-	switch service := service.(type) {
-
-	// If this origin is a unix socket, enforce network type "unix".
-	case *unixSocketPath:
-		httpTransport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return dialContext(ctx, "unix", service.path)
-		}
-
-	// Otherwise, use the regular network config.
-	default:
-		httpTransport.DialContext = dialContext
 	}
 
 	return &httpTransport, nil
