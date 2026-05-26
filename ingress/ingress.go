@@ -311,6 +311,10 @@ func validateIngress(ingress []config.UnvalidatedIngressRule, defaults OriginReq
 			}
 		}
 
+		if err := validateHTTPOriginConfig(service, cfg); err != nil {
+			return Ingress{}, errors.Wrapf(err, "Rule #%d has an invalid originRequest configuration", i+1)
+		}
+
 		var handlers []middleware.Handler
 		if access := r.OriginRequest.Access; access != nil {
 			if err := validateAccessConfiguration(access); err != nil {

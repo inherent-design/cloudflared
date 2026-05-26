@@ -171,7 +171,7 @@ func (q *quicConnection) acceptStream(ctx context.Context) error {
 func (q *quicConnection) runStream(quicStream quic.Stream) {
 	ctx := quicStream.Context()
 	stream := cfdquic.NewSafeStreamCloser(quicStream, q.streamWriteTimeout, q.logger)
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	// we are going to fuse readers/writers from stream <- cloudflared -> origin, and we want to guarantee that
 	// code executed in the code path of handleStream don't trigger an earlier close to the downstream write stream.
