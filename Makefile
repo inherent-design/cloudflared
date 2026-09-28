@@ -128,7 +128,7 @@ endif
 #for FIPS compliance, FPM defaults to MD5.
 RPM_DIGEST := --rpm-digest sha256
 
-GO_TEST_LOG_OUTPUT = /tmp/gotest.log
+GO_TEST_LOG_OUTPUT = gotest.log
 
 .PHONY: all
 all: cloudflared test
@@ -152,8 +152,9 @@ ifeq ($(FIPS), true)
 endif
 
 .PHONY: container
+container: TARGET_OS=linux
 container:
-	docker build --build-arg=TARGET_ARCH=$(TARGET_ARCH) --build-arg=TARGET_OS=$(TARGET_OS) -t cloudflare/cloudflared-$(TARGET_OS)-$(TARGET_ARCH):"$(VERSION)" .
+	docker build --platform=$(TARGET_OS)/$(TARGET_ARCH) --build-arg=TARGETARCH=$(TARGET_ARCH) --build-arg=TARGETOS=$(TARGET_OS) --build-arg=VERSION=$(VERSION) -t cloudflare/cloudflared-$(TARGET_OS)-$(TARGET_ARCH):"$(VERSION)" .
 
 .PHONY: container-fips
 container-fips:
@@ -172,7 +173,7 @@ generate-internal-image-version:
 test: vet
 	$Q go test -json -v -mod=readonly -race $(LDFLAGS) ./... 2>&1 | tee $(GO_TEST_LOG_OUTPUT)
 ifneq ($(FIPS), true)
-	@go run -mod=readonly github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest -input $(GO_TEST_LOG_OUTPUT)
+	@grep -v '"Action":"build-output"' $(GO_TEST_LOG_OUTPUT) | go run -mod=readonly github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
 endif
 
 .PHONY: cover

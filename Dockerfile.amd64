@@ -1,8 +1,10 @@
 # use a builder image for building cloudflare
+ARG VERSION
 FROM golang:1.26.8 AS builder
+ARG VERSION
 ENV GO111MODULE=on \
   CGO_ENABLED=0 \
-  GOPROXY=https://athens.cfdata.org|https://proxy.golang.org|direct \
+  GOPROXY=https://proxy.golang.org,direct \
   # the CONTAINER_BUILD envvar is used set github.com/cloudflare/cloudflared/metrics.Runtime=virtual
   # which changes how cloudflared binds the metrics server
   CONTAINER_BUILD=1 
@@ -16,7 +18,7 @@ RUN go mod download
 COPY . .
 
 # compile cloudflared
-RUN GOOS=linux GOARCH=amd64 make cloudflared
+RUN GOOS=linux GOARCH=amd64 make VERSION=${VERSION} cloudflared
 
 # use a distroless base image with glibc
 FROM gcr.io/distroless/base-debian13:nonroot-amd64@sha256:65795e700eda57743efe12537e031042bd7832a19cc23f772acf2057dc7566f1

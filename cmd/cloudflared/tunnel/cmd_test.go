@@ -13,6 +13,7 @@ import (
 	"github.com/urfave/cli/v2"
 
 	cfdflags "github.com/cloudflare/cloudflared/cmd/cloudflared/flags"
+	"github.com/cloudflare/cloudflared/ingress"
 )
 
 func TestLogClientOptionsRedactsAllowedMail(t *testing.T) {
@@ -122,4 +123,16 @@ func TestHostnameFromURI(t *testing.T) {
 	assert.Equal(t, "localhost:3390", hostnameFromURI("rdp://localhost:3390"))
 	assert.Empty(t, hostnameFromURI("trash"))
 	assert.Empty(t, hostnameFromURI("https://awesomesauce.com"))
+}
+
+func TestTunnelH2cOriginFlagRegistered(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	app := &cli.App{
+		Writer:   &out,
+		Commands: Commands(),
+	}
+
+	require.NoError(t, app.Run([]string{"cloudflared", "tunnel", "--" + ingress.H2cOriginFlag, "--help"}))
+	require.Contains(t, out.String(), "--"+ingress.H2cOriginFlag)
 }

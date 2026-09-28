@@ -45,6 +45,8 @@ const (
 )
 
 // DefaultConfigDirectory returns the default directory of the config file
+//
+//nolint:gosec // Config path can be controlled by environment on Windows by design.
 func DefaultConfigDirectory() string {
 	if runtime.GOOS == "windows" {
 		path := os.Getenv("CFDPATH")
@@ -89,7 +91,7 @@ func DefaultConfigSearchDirectories() []string {
 
 // FileExists checks to see if a file exist at the provided path.
 func FileExists(path string) (bool, error) {
-	f, err := os.Open(path) //nolint:gosec // Callers intentionally probe the provided path
+	_, err := os.Stat(path) //nolint:gosec // Callers intentionally probe the provided path
 	if err != nil {
 		if os.IsNotExist(err) {
 			// ignore missing files
@@ -97,7 +99,6 @@ func FileExists(path string) (bool, error) {
 		}
 		return false, err
 	}
-	_ = f.Close()
 	return true, nil
 }
 
@@ -122,6 +123,8 @@ func FindDefaultConfigPath() string {
 
 // FindOrCreateConfigPath returns the first path that contains a config file
 // or creates one in the primary default path if it doesn't exist
+//
+//nolint:gosec // Config and log paths are local user-controlled paths by design.
 func FindOrCreateConfigPath() string {
 	path := FindDefaultConfigPath()
 
@@ -233,6 +236,8 @@ type OriginRequestConfig struct {
 	IPRules []IngressIPRule `yaml:"ipRules" json:"ipRules,omitempty"`
 	// Attempt to connect to origin with HTTP/2
 	Http2Origin *bool `yaml:"http2Origin" json:"http2Origin,omitempty"`
+	// Connect to origin with HTTP/2 over cleartext (h2c), without TLS
+	H2cOrigin *bool `yaml:"h2cOrigin" json:"h2cOrigin,omitempty"`
 	// Access holds all access related configs
 	Access *AccessConfig `yaml:"access" json:"access,omitempty"`
 }
@@ -385,6 +390,8 @@ func GetConfiguration() *Configuration {
 // ReadConfigFile returns InputSourceContext initialized from the configuration file.
 // On repeat calls returns with the same file, returns without reading the file again; however,
 // if value of "config" flag changes, will read the new config file
+//
+//nolint:gosec // User-supplied config path is expected for this CLI.
 func ReadConfigFile(c *cli.Context, log *zerolog.Logger) (settings *configFileSettings, warnings string, err error) {
 	configFile := c.String("config")
 	if configuration.Source() == configFile || configFile == "" {
