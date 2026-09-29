@@ -290,7 +290,7 @@ notice, do not proceed without explicit confirmation.
 - Use Go modules (`go.mod`) exclusively
 - Resolve dependencies from the locked module graph with `go mod download`; do not vendor dependencies.
 - Builds, tests, vet, and lint use `-mod=readonly`; `go.mod` and `go.sum` must not drift in CI.
-- Linux CI uses Athens before public and direct module sources; macOS and Windows use the public proxy directly.
+- Fork CI and container builds use the public Go proxy with direct fallback; no private Athens proxy is required.
 - CI caches modules in `$GOMODCACHE` and compiled packages in `$GOCACHE` under `.cache/go/` for Go-running jobs.
 - Keep dependencies up-to-date and secure
 - Prefer standard library when possible

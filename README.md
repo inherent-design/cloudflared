@@ -131,6 +131,29 @@ To locally run the tests run `make test`
 To format the code and keep a good code quality use `make fmt` and `make lint`.
 The fork is validated with golangci-lint 2.11.4; run `make test lint` before committing.
 
+### Fork releases
+
+After reviewing and merging the source, push an existing release tag in the form
+`vYYYY.M.P-h2c.N` (for example, `v2026.9.3-h2c.1`). The `H2C Release` workflow also
+supports manual dispatch with that tag as both `release_tag` and the workflow
+ref (`gh workflow run docker-publish.yml --ref <tag> -f release_tag=<tag>`).
+It rejects a dispatch from a different commit, resolves the tag to one commit and
+runs Linux race tests, vet and pinned lint against that exact source.
+
+Both Linux amd64 and arm64 image archives must pass Trivy's fixable HIGH/CRITICAL
+OS and library vulnerability checks before any image or release asset is
+published. Publication loads the checked archives without rebuilding, verifies
+their checksums and registry identities, then publishes the versioned
+multi-platform image and `latest-h2c`, Linux binaries and `SHA256SUMS`. Individual
+architecture tags use `<version>-amd64` and `<version>-arm64`. Release runs share
+one concurrency group and are not cancelled once running.
+
+If a pre-publication check fails, fix it and rerun the workflow before updating
+consumers. A failure during publication can leave partial registry artifacts;
+rerun the same tag to finish publication, then verify both published platforms,
+the embedded version, release checksums and immutable image digest. Never move a
+released tag. Downstream cfgate references must use a verified published release.
+
 ### Mocks
 After changes on interfaces you might need to regenerate the mocks, so run `make mocks`
 
