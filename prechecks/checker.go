@@ -12,6 +12,7 @@ import (
 
 	"github.com/cloudflare/cloudflared/connection"
 	"github.com/cloudflare/cloudflared/edgediscovery/allregions"
+	"github.com/cloudflare/cloudflared/features"
 )
 
 const (
@@ -59,7 +60,10 @@ func (tr TransportResults) Collect() []CheckResult {
 //
 // Each failed probe is retried up to maxRetries times with exponential backoff.
 // The suite is bounded by cfg.Timeout (defaultTimeout if zero).
-func Run(ctx context.Context, caCert string, cfg Config, log *zerolog.Logger, runDialers RunDialers) Report {
+//
+// pqMode controls the TLS curve preferences advertised during probe handshakes,
+// matching the key-exchange algorithms used by the real tunnel connections.
+func Run(ctx context.Context, caCert string, cfg Config, pqMode features.PostQuantumMode, log *zerolog.Logger, runDialers RunDialers) Report {
 	runID := uuid.New()
 
 	if cfg.Timeout <= 0 {
@@ -68,9 +72,10 @@ func Run(ctx context.Context, caCert string, cfg Config, log *zerolog.Logger, ru
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	// Build TLS configs once per protocol.
-	quicTLSConfig, quicTLSErr := probeTLSConfig(caCert, connection.QUIC)
-	http2TLSConfig, http2TLSErr := probeTLSConfig(caCert, connection.HTTP2)
+	// Build TLS configs once per protocol, applying the same curve preferences
+	// (including post-quantum curves) used by production tunnel connections.
+	quicTLSConfig, quicTLSErr := probeTLSConfig(caCert, connection.QUIC, pqMode)
+	http2TLSConfig, http2TLSErr := probeTLSConfig(caCert, connection.HTTP2, pqMode)
 
 	// 1) Resolve edge addresses. Each ResolvedTarget bundles its addr group
 	//    with the DNS CheckResult that labels it, keeping the two in sync.
@@ -156,7 +161,7 @@ func Run(ctx context.Context, caCert string, cfg Config, log *zerolog.Logger, ru
 	return Report{
 		RunID:             runID,
 		Results:           append(dnsResults, results.Collect()...),
-		SuggestedProtocol: suggestProtocol(results.QUIC, results.HTTP2),
+		SuggestedProtocol: suggestProtocol(results.QUIC, results.HTTP2, cfg.ProtocolOverride),
 	}
 }
 
@@ -303,10 +308,52 @@ func severity(s Status) int {
 	}
 }
 
-// suggestProtocol recommends QUIC when all QUIC region probes passed, HTTP/2
-// when all HTTP/2 probes passed, and nil when neither transport works.
+// parseProtocolOverride converts the raw --protocol flag string into a
+// *connection.Protocol. It returns nil when the string is empty, "auto", or
+// unrecognised, so the probe heuristic is used in those cases. "h2mux" is
+// treated as HTTP/2 because both map to the same transport.
+func parseProtocolOverride(flag string) *connection.Protocol {
+	switch flag {
+	case connection.QUIC.String():
+		p := connection.QUIC
+		return &p
+	case connection.HTTP2.String(), "h2mux":
+		p := connection.HTTP2
+		return &p
+	default:
+		// "auto", empty, or unknown — no override; let the heuristic decide.
+		return nil
+	}
+}
+
+// suggestProtocol determines the protocol to report in the pre-check summary.
+//
+// When the caller has explicitly overridden the protocol via --protocol, that
+// choice is honoured when its transport probes produced evidence and did not
+// fail.
+//
+// When there is no override (auto-selection), precedence is QUIC, HTTP/2,
+// and nil. A protocol is only suggested if all probes pass.
+//
 // Any region failing means the transport is treated as failed (worst wins).
-func suggestProtocol(quicResults, http2Results []CheckResult) *connection.Protocol {
+func suggestProtocol(quicResults, http2Results []CheckResult, overrideFlag string) *connection.Protocol {
+	if override := parseProtocolOverride(overrideFlag); override != nil {
+		switch *override {
+		case connection.QUIC:
+			// Only report QUIC as the suggested protocol if its probes did not
+			// all fail — if they did, fall through to the heuristic so the
+			// summary can report a usable fallback or nil.
+			if len(quicResults) > 0 && worstStatus(quicResults) != Fail {
+				return new(connection.QUIC)
+			}
+		case connection.HTTP2:
+			// Same logic for an explicit HTTP/2 override.
+			if len(http2Results) > 0 && worstStatus(http2Results) != Fail {
+				return new(connection.HTTP2)
+			}
+		}
+	}
+
 	if len(quicResults) > 0 && worstStatus(quicResults) == Pass {
 		quic := connection.QUIC
 		return &quic

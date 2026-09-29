@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	"github.com/cloudflare/cloudflared/cfio"
 	"github.com/cloudflare/cloudflared/connection"
 	"github.com/cloudflare/cloudflared/ingress"
+	"github.com/cloudflare/cloudflared/quicktunnelauth"
 	"github.com/cloudflare/cloudflared/stream"
 	"github.com/cloudflare/cloudflared/tracing"
 	"github.com/cloudflare/cloudflared/tunnelrpc/pogs"
@@ -32,13 +34,16 @@ const (
 	trailerHeaderName   = "Trailer"
 )
 
+var errHTTPAuthorizationUnsupportedTransport = errors.New("HTTP authorization does not support TCP transport")
+
 // Proxy represents a means to Proxy between cloudflared and the origin services.
 type Proxy struct {
-	ingressRules ingress.Ingress
-	originDialer ingress.OriginTCPDialer
-	tags         []pogs.Tag
-	flowLimiter  cfdflow.Limiter
-	log          *zerolog.Logger
+	ingressRules          ingress.Ingress
+	originDialer          ingress.OriginTCPDialer
+	tags                  []pogs.Tag
+	flowLimiter           cfdflow.Limiter
+	httpRequestAuthorizer connection.HTTPRequestAuthorizer
+	log                   *zerolog.Logger
 }
 
 // NewOriginProxy returns a new instance of the Proxy struct.
@@ -49,15 +54,35 @@ func NewOriginProxy(
 	flowLimiter cfdflow.Limiter,
 	log *zerolog.Logger,
 ) *Proxy {
-	proxy := &Proxy{
-		ingressRules: ingressRules,
-		originDialer: originDialer,
-		tags:         tags,
-		flowLimiter:  flowLimiter,
-		log:          log,
-	}
+	return NewOriginProxyWithHTTPRequestAuthorizer(
+		ingressRules,
+		originDialer,
+		tags,
+		flowLimiter,
+		nil,
+		log,
+	)
+}
 
-	return proxy
+// NewOriginProxyWithHTTPRequestAuthorizer returns a new Proxy that can authorize
+// HTTP requests before ingress selection. A nil authorizer allows requests to
+// continue to ingress selection.
+func NewOriginProxyWithHTTPRequestAuthorizer(
+	ingressRules ingress.Ingress,
+	originDialer ingress.OriginDialer,
+	tags []pogs.Tag,
+	flowLimiter cfdflow.Limiter,
+	httpRequestAuthorizer connection.HTTPRequestAuthorizer,
+	log *zerolog.Logger,
+) *Proxy {
+	return &Proxy{
+		ingressRules:          ingressRules,
+		originDialer:          originDialer,
+		tags:                  tags,
+		flowLimiter:           flowLimiter,
+		httpRequestAuthorizer: httpRequestAuthorizer,
+		log:                   log,
+	}
 }
 
 func (p *Proxy) applyIngressMiddleware(rule *ingress.Rule, r *http.Request, w connection.ResponseWriter) (error, bool) {
@@ -86,8 +111,25 @@ func (p *Proxy) ProxyHTTP(
 	defer decrementConcurrentRequests()
 
 	req := tr.Request
-	p.appendTagHeaders(req)
+	// TODO (TUN-10901) : Should be an ingress middleware. But given how the current middleware is implemented,
+	//  it would need some refactoring for it to become useful for the logic we are trying to introduce.
+	if p.httpRequestAuthorizer != nil {
+		decision, outcome, err := p.httpRequestAuthorizer.AuthorizeHTTP(w, req)
+		p.log.Debug().
+			Str("authOutcome", outcome).
+			Msg("Quick Tunnel authentication decision")
+		if err != nil {
+			p.log.Warn().Err(err).Msg("HTTP request authorization failed before origin selection")
+			return nil
+		}
+		if decision != connection.HTTPRequestAuthorizationAllowed {
+			return nil
+		}
 
+		w = newResponseWriterWithHeaderFilter(w, quicktunnelauth.FilterQuickTunnelsAuthHeaders)
+	}
+
+	p.appendTagHeaders(req)
 	_, ruleSpan := tr.Tracer().Start(req.Context(), "ingress_match",
 		trace.WithAttributes(attribute.String("req-host", req.Host)))
 	rule, ruleNum := p.ingressRules.FindMatchingRule(req.Host, req.URL.Path)
@@ -137,7 +179,7 @@ func (p *Proxy) ProxyHTTP(
 		p.proxyLocalRequest(originProxy, w, req, isWebsocket)
 		return nil
 	default:
-		return fmt.Errorf("Unrecognized service: %s, %t", rule.Service, originProxy)
+		return fmt.Errorf("unrecognized service: %s, %t", rule.Service, originProxy)
 	}
 }
 
@@ -147,6 +189,13 @@ func (p *Proxy) ProxyTCP(
 	conn connection.ReadWriteAcker,
 	req *connection.TCPRequest,
 ) error {
+	if p.httpRequestAuthorizer != nil {
+		p.log.Debug().
+			Str("authOutcome", "unsupported_tcp_transport").
+			Msg("Quick Tunnel authentication decision")
+		return errHTTPAuthorizationUnsupportedTransport
+	}
+
 	incrementTCPRequests()
 	defer decrementTCPConcurrentRequests()
 
@@ -193,7 +242,7 @@ func (p *Proxy) proxyHTTPRequest(
 ) error {
 	roundTripReq := tr.Request
 	if isWebsocket {
-		roundTripReq = tr.Clone(tr.Request.Context())
+		roundTripReq = tr.Clone(tr.Context())
 		roundTripReq.Header.Set("Connection", "Upgrade")
 		roundTripReq.Header.Set("Upgrade", "websocket")
 		roundTripReq.Header.Set("Sec-Websocket-Version", "13")
@@ -203,7 +252,7 @@ func (p *Proxy) proxyHTTPRequest(
 		// Support for WSGI Servers by switching transfer encoding from chunked to gzip/deflate
 		if disableChunkedEncoding {
 			roundTripReq.TransferEncoding = []string{"gzip", "deflate"}
-			cLength, err := strconv.Atoi(tr.Request.Header.Get("Content-Length"))
+			cLength, err := strconv.Atoi(tr.Header.Get("Content-Length"))
 			if err == nil {
 				roundTripReq.ContentLength = int64(cLength)
 			}
@@ -228,13 +277,12 @@ func (p *Proxy) proxyHTTPRequest(
 	}
 
 	tracing.EndWithStatusCode(ttfbSpan, resp.StatusCode)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
-	headers := make(http.Header, len(resp.Header))
-	// copy headers
-	for k, v := range resp.Header {
-		headers[k] = v
-	}
+	headers := resp.Header.Clone()
+	// Protected-response headers set before origin selection take precedence
+	// over conflicting origin headers.
+	maps.Copy(headers, w.Header())
 
 	// Add spans to response header (if available)
 	tr.AddSpans(headers)
@@ -249,11 +297,11 @@ func (p *Proxy) proxyHTTPRequest(
 		if !ok {
 			return errors.New("internal error: unsupported connection type")
 		}
-		defer rwc.Close()
+		defer func() { _ = rwc.Close() }()
 
 		eyeballStream := &bidirectionalStream{
 			writer: w,
-			reader: tr.Request.Body,
+			reader: tr.Body,
 		}
 
 		stream.Pipe(eyeballStream, rwc, logger)
@@ -292,7 +340,7 @@ func (p *Proxy) proxyStream(
 		return err
 	}
 	connectSpan.End()
-	defer originConn.Close()
+	defer func() { _ = originConn.Close() }()
 	logger.Debug().Msg("origin connection established")
 
 	encodedSpans := tr.GetSpans()
@@ -331,7 +379,7 @@ func (p *Proxy) proxyTCPStream(
 		return err
 	}
 	connectSpan.End()
-	defer originConn.Close()
+	defer func() { _ = originConn.Close() }()
 	logger.Debug().Msg("origin connection established")
 
 	encodedSpans := tr.GetSpans()

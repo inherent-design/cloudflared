@@ -11,8 +11,8 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/cloudflare/cloudflared/connection/dialopts"
-
 	"github.com/cloudflare/cloudflared/edgediscovery/allregions"
+	cfdquic "github.com/cloudflare/cloudflared/quic"
 )
 
 // DNSResolver abstracts edge DNS discovery used by DNS probes.
@@ -44,7 +44,7 @@ type QUICDialer interface {
 		connIndex uint8,
 		logger *zerolog.Logger,
 		opts dialopts.DialOpts,
-	) (quic.Connection, error)
+	) (cfdquic.QUICConnection, error)
 }
 
 // ManagementDialer abstracts the TCP dial to api.cloudflare.com:443 used by

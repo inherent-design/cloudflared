@@ -59,14 +59,19 @@ func (o *httpService) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func (o *httpService) SetOriginServerName(req *http.Request) {
-	o.transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		conn, err := o.transport.DialContext(ctx, network, addr)
+	t, ok := o.transport.(*http.Transport)
+	if !ok {
+		// h2c transport doesn't use TLS, so SNI matching is not applicable
+		return
+	}
+	t.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := t.DialContext(ctx, network, addr)
 		if err != nil {
 			return nil, err
 		}
 		return tls.Client(conn, &tls.Config{
-			RootCAs:            o.transport.TLSClientConfig.RootCAs,
-			InsecureSkipVerify: o.transport.TLSClientConfig.InsecureSkipVerify, // nolint: gosec
+			RootCAs:            t.TLSClientConfig.RootCAs,
+			InsecureSkipVerify: t.TLSClientConfig.InsecureSkipVerify, // nolint: gosec
 			ServerName:         req.Host,
 		}), nil
 	}

@@ -14,8 +14,10 @@ cscope.*
 /packaging
 .DS_Store
 *-session.log
+gotest.log
 ssh_server_tests/.env
 /.cover
 built_artifacts/
 component-tests/.venv
 /artifacts
+/vendor

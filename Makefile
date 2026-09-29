@@ -128,7 +128,7 @@ endif
 #for FIPS compliance, FPM defaults to MD5.
 RPM_DIGEST := --rpm-digest sha256
 
-GO_TEST_LOG_OUTPUT = /tmp/gotest.log
+GO_TEST_LOG_OUTPUT = gotest.log
 
 .PHONY: all
 all: cloudflared test
@@ -146,25 +146,34 @@ cloudflared:
 ifeq ($(FIPS), true)
 	$(info Building cloudflared with go-fips)
 endif
-	GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) $(ARM_COMMAND) go build -mod=vendor $(GO_BUILD_TAGS) $(LDFLAGS) $(IMPORT_PATH)/cmd/cloudflared
+	GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) $(ARM_COMMAND) go build -mod=readonly $(GO_BUILD_TAGS) $(LDFLAGS) $(IMPORT_PATH)/cmd/cloudflared
 ifeq ($(FIPS), true)
 	./check-fips.sh cloudflared
 endif
 
 .PHONY: container
+container: TARGET_OS=linux
 container:
-	docker build --build-arg=TARGET_ARCH=$(TARGET_ARCH) --build-arg=TARGET_OS=$(TARGET_OS) -t cloudflare/cloudflared-$(TARGET_OS)-$(TARGET_ARCH):"$(VERSION)" .
+	docker build --platform=$(TARGET_OS)/$(TARGET_ARCH) --build-arg=TARGETARCH=$(TARGET_ARCH) --build-arg=TARGETOS=$(TARGET_OS) --build-arg=VERSION=$(VERSION) -t cloudflare/cloudflared-$(TARGET_OS)-$(TARGET_ARCH):"$(VERSION)" .
+
+.PHONY: container-fips
+container-fips:
+	docker build -f Dockerfile.fips.$(TARGET_ARCH) -t cloudflare/cloudflared-fips-linux-$(TARGET_ARCH):"$(VERSION)" .
 
 .PHONY: generate-docker-version
 generate-docker-version:
 	echo latest $(VERSION) > versions
 
+.PHONY: generate-internal-image-version
+generate-internal-image-version:
+	echo $(VERSION) > versions-internal
+
 
 .PHONY: test
 test: vet
-	$Q go test -json -v -mod=vendor -race $(LDFLAGS) ./... 2>&1 | tee $(GO_TEST_LOG_OUTPUT)
+	$Q go test -json -v -mod=readonly -race $(LDFLAGS) ./... 2>&1 | tee $(GO_TEST_LOG_OUTPUT)
 ifneq ($(FIPS), true)
-	@go run -mod=readonly github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest -input $(GO_TEST_LOG_OUTPUT)
+	@grep -v '"Action":"build-output"' $(GO_TEST_LOG_OUTPUT) | go run -mod=readonly github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
 endif
 
 .PHONY: cover
@@ -251,12 +260,12 @@ capnp:
 
 .PHONY: vet
 vet:
-	$Q go vet -mod=vendor github.com/cloudflare/cloudflared/...
+	$Q go vet -mod=readonly github.com/cloudflare/cloudflared/...
 
 .PHONY: fmt
 fmt:
-	@goimports -l -w -local github.com/cloudflare/cloudflared $$(go list -mod=vendor -f '{{.Dir}}' -a ./... | fgrep -v tunnelrpc/proto)
-	@go fmt $$(go list -mod=vendor -f '{{.Dir}}' -a ./... | fgrep -v tunnelrpc/proto)
+	@goimports -l -w -local github.com/cloudflare/cloudflared $$(go list -mod=readonly -f '{{.Dir}}' -a ./... | fgrep -v tunnelrpc/proto)
+	@go fmt $$(go list -mod=readonly -f '{{.Dir}}' -a ./... | fgrep -v tunnelrpc/proto)
 
 .PHONY: fmt-check
 fmt-check:
